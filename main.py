@@ -12,7 +12,7 @@ import io
 from base import *
 from state import *
 import aiohttp
-
+from functools import partial
 from PIL import Image
 # Создаем объект хранилища состояний
 storage = MemoryStorage()
@@ -24,10 +24,11 @@ dp = Dispatcher(bot,storage=storage)
 
 
 # Список администраторов (ID пользователей Telegram)
-admin_ids = [5455171373, 742904205]  # Замените ID на фактические ID ваших администраторов
-
-
-
+admin_ids = [5455171373, 742904205,907703822]  # Замените ID на фактические ID ваших администраторов
+folder_name = 'SearchCar_bot/images'
+folder_path = os.path.abspath(folder_name)
+if not os.path.exists("images"):
+    os.makedirs("images")
 #-------------------------------------------START-------------------------------------------
 @dp.message_handler(commands=['start'])
 async def start(message:types.Message):
@@ -191,111 +192,117 @@ async def crud_model(query:types.CallbackQuery):
 #------------------Добавить описание--------------------------
 
 @dp.callback_query_handler(lambda c: c.data.startswith('add_descp_'))
-async def descpription_admin(query:types.CallbackQuery):
-    # Получаем идентификатор модели авто из query.data или из другого источника
-    model_id = query.data[10:]  # Предполагается, что идентификатор модели передается в query.data
-    print(model_id)
+async def descpription_admin(query: types.CallbackQuery,state:FSMContext):
+    model = query.data[10:]  # идентификатор модели передается в query.data
+    print(model)
+    car = get_all_by_id(model)
+    # Запрашиваем у пользователя описание для модели
+    await query.answer(f"Пожалуйста, отправьте описание для модели машины {model}")
+    await DescriptionForm.add_description.set() 
+    await state.update_data(model_id=model)
 
-    # Запрашиваем у пользователя 4 фото для модели
-    await query.answer(f"Пожалуйста, отправьте описание для модели машины {model_id}")
+@dp.message_handler(state=DescriptionForm.add_description, content_types=types.ContentType.TEXT)
+async def handle_add_description(message: types.Message, state: FSMContext):
+    text = message.text
+    async with state.proxy() as data:
+        model_id = data['model_id']  # Retrieve the model_id from the FSMContext
 
-    @dp.message_handler(content_types=types.ContentType.TEXT)
-    async def handle_photos(message: types.Message):
-        text = message.text
+    update_query = '''UPDATE car_models
+                      SET description = %s
+                      WHERE id = %s'''
+    params = (text, model_id)
 
-        update_query = '''UPDATE car_models
-                                SET description = %s
-                                WHERE id = %s'''
-        params = (text, model_id)
+    try:
+        connection = create_connection()
+        cursor = connection.cursor()
+        cursor.execute(update_query, params)
+        connection.commit()
+        await bot.send_message(message.chat.id, 'Описание успешно добавлено')
+    except Error as e:
+        await message.answer('Ошибка при загрузке')
 
-        try:
-            connection = create_connection()
-            cursor = connection.cursor()
-            cursor.execute(update_query, params)
-            connection.commit()
-            await bot.send_message(message.chat.id, 'Описание успешно добавлено')
-            
-        except Error as e:
-            await message.answer('Ошибка при загрузке')
-        car = get_all_by_id(model_id)
-        print(car[0][9])
-        info = []
-        if car[0][9]==None:
-            info.append('Добавить описание')
-            info.append('add_descp')
-        else:
-            info.append('Редактировать описание')
-            info.append('change_descp')
-        print(info)
-        markup = types.InlineKeyboardMarkup()
-        btn1 = types.InlineKeyboardButton('Добавить фото',callback_data=f'add_image_{model_id}')
-        btn6 = types.InlineKeyboardButton(f'{info[0]}',callback_data=f'{info[1]}_{model_id}')
-        btn2 = types.InlineKeyboardButton('Удалить модель',callback_data=f'delete_model_{model_id}')
-        btn4 = types.InlineKeyboardButton('Назад',callback_data=f'display_cars_admin')
-        btn5 = types.InlineKeyboardButton('Посмотреть карточку',callback_data=f'view_car_{model_id}')
-        markup.add(btn1,btn2)
-        markup.add(btn5,btn6)
-        markup.add(btn4)
-        await bot.send_message(query.message.chat.id,'Выберите опцию',reply_markup=markup)
+    await state.finish()  # Завершаем состояние после добавления описания
+
+    car = get_all_by_id(model_id)
+    print(car[0][9])
+    info = []
+    if car[0][9] is None:
+        info.append('Добавить описание')
+        info.append('add_descp')
+    else:
+        info.append('Редактировать описание')
+        info.append('change_descp')
+    print(info)
+    markup = types.InlineKeyboardMarkup()
+    btn1 = types.InlineKeyboardButton('Добавить фото', callback_data=f'add_image_{model_id}')
+    btn6 = types.InlineKeyboardButton(f'{info[0]}', callback_data=f'{info[1]}_{model_id}')
+    btn2 = types.InlineKeyboardButton('Удалить модель', callback_data=f'delete_model_{model_id}')
+    btn4 = types.InlineKeyboardButton('Назад', callback_data=f'display_cars_admin')
+    btn5 = types.InlineKeyboardButton('Посмотреть карточку', callback_data=f'view_car_{model_id}')
+    markup.add(btn1, btn2)
+    markup.add(btn5, btn6)
+    markup.add(btn4)
+
+    await bot.send_message(message.chat.id, 'Выберите опцию', reply_markup=markup)
 
 
-    dp.register_message_handler(handle_photos, content_types=types.ContentType.TEXT)
 
 @dp.callback_query_handler(lambda c: c.data.startswith('change_descp_'))
-async def descpription_admin(query:types.CallbackQuery):
-    # Получаем идентификатор модели авто из query.data или из другого источника
-    model_id = query.data[13:]  # Предполагается, что идентификатор модели передается в query.data
-    print(model_id)
+async def descpription_admin(query: types.CallbackQuery,state:FSMContext):
+    model_id = query.data[13:]  # Extract the model_id from query.data
+    print(f'Ид  cars {model_id}')
     car = get_all_by_id(model_id)
 
-    await bot.send_message(query.message.chat.id,f'Вот описание под машину\n {car[0][9]}')
+    await bot.send_message(query.message.chat.id, f'Вот описание под машину\n {car[0][9]}')
 
+    await bot.send_message(query.message.chat.id, 'Отправьте новое описание машины')
+    await DescriptionForm.edit_description.set()  # Set the state to edit_description
 
+    # Save the model_id in the state to be used in the handle_edit_description function
+    await state.update_data(model_id=model_id)
 
-        # Запрашиваем у пользователя 4 фото для модели
-    await bot.send_message(query.message.chat.id,'Отправьте новое описание машины')
+@dp.message_handler(state=DescriptionForm.edit_description, content_types=types.ContentType.TEXT)
+async def handle_edit_description(message: types.Message, state: FSMContext):
+    text = message.text
+    async with state.proxy() as data:
+        model_id = data['model_id']  # Retrieve the model_id from the FSMContext
 
-    @dp.message_handler(content_types=types.ContentType.TEXT)
-    async def handle_photos(message: types.Message):
-            text = message.text
+    update_query = '''UPDATE car_models
+                      SET description = %s
+                      WHERE id = %s'''
+    params = (text, model_id)
+    try:
+        connection = create_connection()
+        cursor = connection.cursor()
+        cursor.execute(update_query, params)
+        connection.commit()
+        await bot.send_message(message.chat.id, 'Описание успешно изменено')
+    except Error as e:
+        await message.answer('Ошибка при загрузке')
 
-            update_query = '''UPDATE car_models
-                                    SET description = %s
-                                    WHERE id = %s'''
-            params = (text, model_id)
+    await state.finish()  # Завершаем состояние после редактирования описания
 
-            try:
-                connection = create_connection()
-                cursor = connection.cursor()
-                cursor.execute(update_query, params)
-                connection.commit()
-                await bot.send_message(message.chat.id, 'Описание успешно добавлено')
-                
-            except Error as e:
-                await message.answer('Ошибка при загрузке')
+    car = get_all_by_id(model_id)
+    print(car[0][9])
+    info = []
+    if car[0][9] is None:
+        info.append('Добавить описание')
+        info.append('add_descp')
+    else:
+        info.append('Редактировать описание')
+        info.append('change_descp')
+    print(info)
+    markup = types.InlineKeyboardMarkup()
+    btn1 = types.InlineKeyboardButton('Добавить фото', callback_data=f'add_image_{model_id}')
+    btn6 = types.InlineKeyboardButton(f'{info[0]}', callback_data=f'{info[1]}_{model_id}')
+    btn2 = types.InlineKeyboardButton('Удалить модель', callback_data=f'delete_model_{model_id}')
+    btn4 = types.InlineKeyboardButton('Назад', callback_data=f'display_cars_admin')
+    btn5 = types.InlineKeyboardButton('Посмотреть карточку', callback_data=f'view_car_{model_id}')
+    markup.add(btn1, btn2)
+    markup.add(btn5, btn6)
+    markup.add(btn4)
 
-            car = get_all_by_id(model_id)
-            print(car[0][9])
-            info = []
-            if car[0][9]==None:
-                info.append('Добавить описание')
-                info.append('add_descp')
-            else:
-                info.append('Редактировать описание')
-                info.append('change_descp')
-            print(info)
-            markup = types.InlineKeyboardMarkup()
-            btn1 = types.InlineKeyboardButton('Добавить фото',callback_data=f'add_image_{model_id}')
-            btn6 = types.InlineKeyboardButton(f'{info[0]}',callback_data=f'{info[1]}_{model_id}')
-            btn2 = types.InlineKeyboardButton('Удалить модель',callback_data=f'delete_model_{model_id}')
-            btn4 = types.InlineKeyboardButton('Назад',callback_data=f'display_cars_admin')
-            btn5 = types.InlineKeyboardButton('Посмотреть карточку',callback_data=f'view_car_{model_id}')
-            markup.add(btn1,btn2)
-            markup.add(btn5,btn6)
-            markup.add(btn4)
-            await bot.send_message(query.message.chat.id,'Выберите опцию',reply_markup=markup)
-
-    dp.register_message_handler(handle_photos, content_types=types.ContentType.TEXT)
+    await bot.send_message(message.chat.id, 'Выберите опцию', reply_markup=markup)
 
 #-------------------------Просмотреть машины админ--------------------------------------------
 
@@ -314,7 +321,7 @@ async def view_car_admin(query: types.CallbackQuery):
         model = cursor.fetchone()
         if model:
             # Формируем информацию о модели авто
-            car_info = f"Марка: {model[1]}\nМодель: {model[2]}\nГод: {model[3]}\Цена: {model[4]}"
+            car_info = f"Марка: {model[1]}\nМодель: {model[2]}\nГод: {model[3]}\nЦена: {model[4]}"
             # Создаем список с медиа-объектами изображений
             media = []
             if model[5]:
@@ -335,103 +342,143 @@ async def view_car_admin(query: types.CallbackQuery):
                 description = model[9]
                 await bot.send_message(query.message.chat.id, f"Описание: {description}")
             
-            markup = types.InlineKeyboardMarkup()
-            btn1 = types.InlineKeyboardButton('Добавить фото',callback_data=f'add_image_{model}')
-            btn6 = types.InlineKeyboardButton('Добавить описание',callback_data=f'add_descp_{model}')
-            btn2 = types.InlineKeyboardButton('Удалить модель',callback_data=f'delete_model_{model}')
-            btn4 = types.InlineKeyboardButton('Назад',callback_data=f'display_cars_admin')
-            btn5 = types.InlineKeyboardButton('Посмотреть карточку',callback_data=f'view_car_{model}')
-            markup.add(btn1,btn2)
-            markup.add(btn5,btn6)
-            markup.add(btn4)
-            await bot.send_message(query.message.chat.id,'Выберите опцию',reply_markup=markup)
+
         else:
             await bot.send_message(query.message.chat.id, "Модель авто не найдена")
             model = query.data[7:]
 
     except Error as e:
-        print(f"The error '{e}' occurred")
+        print(f'Error {e}')
+    car = get_all_by_id(model_id)
+    print(car[0][9])
+    info = []
+
+    if car[0][9]==None:
+        info.append('Добавить описание')
+        info.append('add_descp')
+    else:
+        info.append('Редактировать описание')
+        info.append('change_descp')
+    print(info)
+    markup = types.InlineKeyboardMarkup()
+    btn1 = types.InlineKeyboardButton('Добавить фото',callback_data=f'add_image_{model_id}')
+    btn6 = types.InlineKeyboardButton(f'{info[0]}',callback_data=f'{info[1]}_{model_id}')
+    btn2 = types.InlineKeyboardButton('Удалить модель',callback_data=f'delete_model_{model_id}')
+    btn4 = types.InlineKeyboardButton('Назад',callback_data=f'display_cars_admin')
+    btn5 = types.InlineKeyboardButton('Посмотреть карточку',callback_data=f'view_car_{model_id}')
+    markup.add(btn1,btn2)
+    markup.add(btn5,btn6)
+    markup.add(btn4)
+    await bot.send_message(query.message.chat.id,'Выберите опцию',reply_markup=markup)
 
 
 #---------------------------------------------Добавить изображение для машины-------------------------
 
 
-
-
-
+# Функция для асинхронного скачивания и сохранения фотографии
+photos = []
 @dp.callback_query_handler(lambda c: c.data.startswith('add_image_'))
-async def add_description(query: types.CallbackQuery):
-    photos = []
-    # Получаем идентификатор модели авто из query.data или из другого источника
-    model_id = query.data[10:]  # Предполагается, что идентификатор модели передается в query.data
-    print(model_id)
-
-    # Запрашиваем у пользователя 4 фото для модели
+async def add_description(query: types.CallbackQuery, state: FSMContext):
+    model_id = query.data[10:]
     await query.answer(f"Пожалуйста, отправьте 4 фото для модели с идентификатором {model_id}")
 
-    # Функция для асинхронного скачивания и сохранения фотографии
-    async def download_photo(session, photo, index):
-        image_url = await photo.get_url()
-        image_path = os.path.join('images', f'{model_id}_{index + 1}.jpg')
+    # Clear any previous photo list and set the model_id in the FSMContext
+    photos.clear()
+    await state.update_data(model_id=model_id)
 
-        async with session.get(image_url) as response:
-            if response.status == 200:
-                with open(image_path, 'wb') as f:
-                    while True:
-                        chunk = await response.content.read(1024)
-                        if not chunk:
-                            break
-                        f.write(chunk)
-                return image_path
+    # Set the initial state to photo_1 for the first photo
+    await AddPhotosState.photo_1.set()
 
-    # Функция для асинхронного скачивания всех фотографий
-    async def process_photos():
-        async with aiohttp.ClientSession() as session:
-            tasks = [download_photo(session, photo, index) for index, photo in enumerate(photos)]
-            return await asyncio.gather(*tasks)
+@dp.message_handler(state=AddPhotosState.photo_1, content_types=types.ContentType.PHOTO)
+@dp.message_handler(state=AddPhotosState.photo_2, content_types=types.ContentType.PHOTO)
+@dp.message_handler(state=AddPhotosState.photo_3, content_types=types.ContentType.PHOTO)
+@dp.message_handler(state=AddPhotosState.photo_4, content_types=types.ContentType.PHOTO)
+async def handle_photo_message(message: types.Message, state: FSMContext):
+    async with state.proxy() as data:
+        model_id = data['model_id']  # Retrieve the model_id from the FSMContext
 
-    # Функция для обработки сообщений с фотографиями
-    async def handle_photo_message(message: types.Message):
-        nonlocal photos
-        if len(photos) < 4:
-            photos.append(message.photo[-1])  # Берем только одну фотографию (с максимальным качеством)
+    if len(photos) < 4:
+        photos.append(message.photo[-1])  # Save the last photo sent (with the highest quality)
 
-        if len(photos) == 4:
-            # Скачиваем и сохраняем фотографии
-            downloaded_images = await process_photos()
+    # Set the next state for the next photo
+    if len(photos) == 1:
+        await AddPhotosState.photo_2.set()
+    elif len(photos) == 2:
+        await AddPhotosState.photo_3.set()
+    elif len(photos) == 3:
+        await AddPhotosState.photo_4.set()
+    else:
+        # If there are no more states, it means all 4 photos have been received
+        # Process the photos, save them, and update the database
+        downloaded_images = await process_photos(photos, model_id)
+        await update_database_with_images(downloaded_images, model_id)
 
-            # Выводим список скачанных фотографий для проверки
-            print("Скачанные фотографии:")
-            print(downloaded_images)
+        await state.finish()
+        await bot.send_message(message.chat.id,'Фотографии успещно добавлены')
+        car = get_all_by_id(model_id)
+        print(car[0][9])
+        info = []
 
-            # Здесь можно выполнить дополнительные действия с сохраненными фотографиями
-            # Например, обновить запись в базе данных, добавив пути к фотографиям.
+        if car[0][9]==None:
+            info.append('Добавить описание')
+            info.append('add_descp')
+        else:
+            info.append('Редактировать описание')
+            info.append('change_descp')
+        markup = types.InlineKeyboardMarkup()
+        btn1 = types.InlineKeyboardButton('Добавить фото',callback_data=f'add_image_{model_id}')
+        btn6 = types.InlineKeyboardButton(f'{info[0]}',callback_data=f'{info[1]}_{model_id}')
+        btn2 = types.InlineKeyboardButton('Удалить модель',callback_data=f'delete_model_{model_id}')
+        btn4 = types.InlineKeyboardButton('Назад',callback_data=f'display_cars_admin')
+        btn5 = types.InlineKeyboardButton('Посмотреть карточку',callback_data=f'view_car_{model_id}')
+        markup.add(btn1,btn2)
+        markup.add(btn5,btn6)
+        markup.add(btn4)
+        await bot.send_message(message.chat.id,'Выберите опцию',reply_markup=markup)
 
-            # Отправляем ответ пользователю
-            await message.answer("Фотографии успешно сохранены")
-               #         # Обновите запись в базе данных, добавив пути к фотографиям
-            update_query = '''UPDATE car_models
-                               SET image1 = %s, image2 = %s, image3 = %s, image4 = %s
-                                 WHERE id = %s'''
-            params = (downloaded_images[0],downloaded_images[1], downloaded_images[2], downloaded_images[3], model_id) # try: # connection = create_connection() # cursor = connection.cursor() # cursor.execute(update_query, params) # connection.commit() # await bot.send_message(message.chat.id, 'Фотографии успешно добавлены') #except Error as e: # await message.answer('Ошибка при загрузке') dp. register_message_handler(handle_text_adm, content_types=types.ContentType.TEXT)'Фотографии успешно добавлены')
-            connection = create_connection()
-            cursor = connection.cursor()
-            cursor.execute(update_query, params)
-            connection.commit() 
-  
-            markup = types.InlineKeyboardMarkup()
-            btn1 = types.InlineKeyboardButton('Добавить фото',callback_data=f'add_image_{model_id}')
-            btn6 = types.InlineKeyboardButton('Добавить описание',callback_data=f'add_descp_{model_id}')
-            btn2 = types.InlineKeyboardButton('Удалить модель',callback_data=f'delete_model_{model_id}')
-            btn4 = types.InlineKeyboardButton('Назад',callback_data=f'display_cars_admin')
-            btn5 = types.InlineKeyboardButton('Посмотреть карточку',callback_data=f'view_car_{model_id}')
-            markup.add(btn1,btn2)
-            markup.add(btn5,btn6)
-            markup.add(btn4)
-            await bot.edit_message_reply_markup(chat_id=query.message.chat.id, message_id=query.message.message_id, reply_markup=markup)
-    dp.register_message_handler(handle_photo_message, content_types=types.ContentType.PHOTO)
+async def download_photo(session, photo, index, model_id):
+    image_url = await photo.get_url()
+    image_path = os.path.join('SearchCar_bot/images', f'{model_id}_photo{index + 1}.jpg')
+    print(f"Downloading photo for model_id: {model_id}")
+    async with session.get(image_url) as response:
+        if response.status == 200:
+            with open(image_path, 'wb') as f:
+                while True:
+                    chunk = await response.content.read(1024)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+            return image_path
 
-#-------------------------------------------Удалить машину-------------------------------------------------
+async def process_photos(photos_to_process, model_id):
+    async with aiohttp.ClientSession() as session:
+        print(f'Эта машина под номером {model_id}')
+        photo_dict = {}  # Dictionary to store the results with photo index as the key
+        tasks = [download_photo(session, photo, index, model_id) for index, photo in enumerate(photos_to_process)]
+        for index, task in enumerate(asyncio.as_completed(tasks)):
+            downloaded_image = await task
+            photo_dict[index] = downloaded_image
+        return [photo_dict[i] for i in range(len(photos_to_process))]
+
+async def update_database_with_images(downloaded_images, model_id):
+    # Update the database with the paths to the images
+    # Replace the following code with your actual database update logic.
+    # You may need to use a database library like pymysql or SQLAlchemy.
+    update_query = '''UPDATE car_models
+                      SET image1 = %s, image2 = %s, image3 = %s, image4 = %s
+                      WHERE id = %s'''
+    params = (downloaded_images[0], downloaded_images[1], downloaded_images[2], downloaded_images[3], model_id)
+
+    # Execute the update query and commit changes to the database.
+    # For this example, we are not using a real database, so we don't execute the query.
+    cursor = connection.cursor()
+    cursor.execute(update_query, params)
+    connection.commit()
+    cursor.close()
+    
+
+
+#--------ва-----------------------------------Удалить машину-------------------------------------------------
 
 @dp.callback_query_handler(lambda c: c.data.startswith('delete_model_'))
 async def delete_model(query: types.CallbackQuery):
@@ -440,12 +487,24 @@ async def delete_model(query: types.CallbackQuery):
     print(model_id)
     connection = create_connection()
     try:
+        file_list = os.listdir(folder_path)
         cursor = connection.cursor()
         delete_query = '''DELETE FROM car_models WHERE id = %s'''
         params = (model_id,)
         cursor.execute(delete_query, params)
         connection.commit()
         await query.answer("Модель успешно удалена")
+        for file_name in file_list:
+            if file_name.startswith(f'{model_id}'):
+                file_path = os.path.join(folder_path, file_name)
+                try:
+                    if os.path.isfile(file_path):
+                        os.remove(file_path)
+                        print(f"Файл {file_name} успешно удален.")
+                    else:
+                        print(f"{file_name} не является файлом.")
+                except Exception as e:
+                    print(f"Ошибка при удалении {file_name}: {e}")
 
     except Error as e:
         await query.answer(f'Ошибка при удалении: {e}')
@@ -765,4 +824,4 @@ if __name__ == '__main__':
     connection = create_connection()  # Создание подключения к базе данных
     create_car_models_table(connection)  # Создание таблицы моделей авто
     create_car_questions(connection)
-    executor.start_polling(dp)
+    executor.start_polling(dp,skip_updates=True)

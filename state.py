@@ -17,3 +17,14 @@ class AddCarState(StatesGroup):
     image3 = State()
     image4 = State()
     description = State()
+
+
+class AddPhotosState(StatesGroup):
+    photo_1 = State()
+    photo_2 = State()
+    photo_3 = State()
+    photo_4 = State()
+
+class DescriptionForm(StatesGroup):
+    add_description = State()
+    edit_description = State()
